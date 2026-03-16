@@ -51,17 +51,14 @@ def run_experiment(name, config, dry_run=False):
     out_dir = config.get('out_dir', f'ablations/results/{name}')
     os.makedirs(out_dir, exist_ok=True)
 
-    # Build command: python train.py with config overrides
+    # Build command: python train.py with --key=value overrides
+    # nanoGPT's configurator.py requires the -- prefix (line 31: assert arg.startswith('--'))
     cmd = [sys.executable, str(PROJECT_ROOT / 'train.py')]
     for key, value in config.items():
-        if key == 'out_dir':
-            cmd.append(f"out_dir='{value}'")
-        elif isinstance(value, str):
-            cmd.append(f"{key}='{value}'")
-        elif isinstance(value, bool):
-            cmd.append(f"{key}={'True' if value else 'False'}")
+        if isinstance(value, bool):
+            cmd.append(f"--{key}={'True' if value else 'False'}")
         else:
-            cmd.append(f"{key}={value}")
+            cmd.append(f"--{key}={value}")
 
     print(f"\n  Command: {' '.join(cmd[:3])} ...")
 

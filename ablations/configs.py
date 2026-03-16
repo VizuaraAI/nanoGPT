@@ -48,17 +48,18 @@ A1_DROPOUT = {
 }
 
 # =============================================================================
-# A2: DEPTH VS WIDTH (ISO-PARAMETER)
-# All configs have roughly the same parameter count (~10.6M).
+# A2: DEPTH VS WIDTH TRADEOFF
 # Tests whether depth or width matters more for character-level LM.
+# NOTE: Parameter counts are NOT exactly matched (~26% spread).
+# This is a tradeoff study, not a strict iso-parameter comparison.
 #
 # Parameter count formula (approximate):
 #   params ≈ 12 * n_layer * n_embd^2 (dominated by attention + MLP weights)
 #
 # Configs:
-#   Deep+Narrow:  12 layers, 4 heads, 288 embd → ~12*12*288^2 ≈ 11.9M
-#   Baseline:      6 layers, 6 heads, 384 embd → ~12*6*384^2  ≈ 10.6M
-#   Shallow+Wide:  3 layers, 8 heads, 512 embd → ~12*3*512^2  ≈  9.4M
+#   Deep+Narrow:  12 layers, 4 heads, 288 embd → ~11.9M params
+#   Baseline:      6 layers, 6 heads, 384 embd → ~10.6M params
+#   Shallow+Wide:  3 layers, 8 heads, 512 embd → ~ 9.4M params
 # =============================================================================
 A2_DEPTH_WIDTH = {
     'deep_narrow':   dict(**BASELINE, n_layer=12, n_head=4, n_embd=288,
