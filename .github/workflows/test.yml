@@ -13,214 +13,100 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11"]
-    
+        python-version: ["3.10", "3.11", "3.12"]
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Cache pip dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-python${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/setup.py') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-python${{ matrix.python-version }}-
-          ${{ runner.os }}-pip-
-
-    - name: Install system dependencies
+    - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential
-
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip wheel setuptools
+        python -m pip install --upgrade pip
         pip install torch --index-url https://download.pytorch.org/whl/cpu
-        pip install numpy pytest pytest-cov pytest-xvfb pytest-html pytest-json-report
-        
-        # Install additional requirements if they exist
-        if [ -f requirements.txt ]; then
-          pip install -r requirements.txt
-        fi
-        if [ -f requirements-dev.txt ]; then
-          pip install -r requirements-dev.txt
-        fi
-        if [ -f pyproject.toml ]; then
-          pip install -e .
-        fi
+        pip install numpy pytest tiktoken transformers datasets
 
-    - name: Verify installation
+    - name: Verify imports
       run: |
-        python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
-        python -c "import numpy; print(f'NumPy version: {numpy.__version__}')"
-        python -c "import pytest; print(f'pytest version: {pytest.__version__}')"
+        python -c "import torch; print(f'PyTorch {torch.__version__}')"
+        python -c "import numpy; print(f'NumPy {numpy.__version__}')"
+        python -c "
+        from model import GPT, GPTConfig
+        config = GPTConfig(n_layer=2, n_head=2, n_embd=64, block_size=32, vocab_size=100)
+        model = GPT(config)
+        print(f'GPT model created: {model.get_num_params()/1e3:.1f}K params')
+        "
 
-    - name: Create tests directory if it doesn't exist
+    - name: Run model unit tests
       run: |
-        mkdir -p tests
-        if [ ! -f tests/__init__.py ]; then
-          touch tests/__init__.py
-        fi
-        
-        # Create a basic test file if none exist
-        if [ -z "$(find tests -name 'test_*.py' -o -name '*_test.py')" ]; then
-          cat > tests/test_basic.py << 'EOF'
-        import sys
-        import os
-        
-        # Add the project root to Python path
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        
-        def test_imports():
-            """Test that basic imports work."""
-            try:
-                import torch
-                import numpy as np
-                assert True
-            except ImportError as e:
-                assert False, f"Import failed: {e}"
-        
-        def test_torch_basic():
-            """Test basic PyTorch functionality."""
-            import torch
-            x = torch.randn(2, 3)
-            assert x.shape == (2, 3)
-            assert x.dtype == torch.float32
-        
-        def test_numpy_basic():
-            """Test basic NumPy functionality."""
-            import numpy as np
-            x = np.random.randn(2, 3)
-            assert x.shape == (2, 3)
-            assert x.dtype == np.float64
-        EOF
-        fi
+        python -c "
+        import torch
+        from model import GPT, GPTConfig
 
-    - name: Lint code (if flake8 is available)
-      continue-on-error: true
+        # Test 1: Model creation
+        config = GPTConfig(n_layer=2, n_head=2, n_embd=64, block_size=32, vocab_size=256)
+        model = GPT(config)
+        print('PASS: Model creation')
+
+        # Test 2: Forward pass
+        idx = torch.randint(0, 256, (2, 16))
+        logits, loss = model(idx)
+        assert logits.shape == (2, 16, 256), f'Expected (2,16,256), got {logits.shape}'
+        print('PASS: Forward pass shape correct')
+
+        # Test 3: Forward pass with targets (loss computation)
+        targets = torch.randint(0, 256, (2, 16))
+        logits, loss = model(idx, targets)
+        assert loss is not None, 'Loss should not be None with targets'
+        assert loss.item() > 0, 'Loss should be positive'
+        print(f'PASS: Loss computation (loss={loss.item():.4f})')
+
+        # Test 4: Generate
+        gen = model.generate(idx[:1, :8], max_new_tokens=10)
+        assert gen.shape == (1, 18), f'Expected (1,18), got {gen.shape}'
+        print('PASS: Generation')
+
+        # Test 5: crop_block_size
+        model.crop_block_size(16)
+        assert model.config.block_size == 16
+        idx_short = torch.randint(0, 256, (1, 10))
+        logits, _ = model(idx_short)
+        assert logits.shape == (1, 10, 256)
+        print('PASS: crop_block_size')
+
+        # Test 6: get_num_params
+        n = model.get_num_params()
+        assert n > 0, 'Param count should be positive'
+        print(f'PASS: get_num_params = {n}')
+
+        print()
+        print('All 6 tests passed!')
+        "
+
+    - name: Run config validation
       run: |
-        if pip show flake8 > /dev/null 2>&1; then
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        else
-          echo "flake8 not installed, skipping linting"
-        fi
+        python -c "
+        # Validate all config files are valid Python
+        import importlib.util, sys, os
 
-    - name: Run tests with pytest
-      id: pytest
-      run: |
-        pytest tests/ \
-          --verbose \
-          --tb=short \
-          --cov=. \
-          --cov-report=xml \
-          --cov-report=html \
-          --cov-report=term-missing \
-          --html=test-report.html \
-          --self-contained-html \
-          --json-report \
-          --json-report-file=test-report.json \
-          --junit-xml=junit.xml
-      continue-on-error: true
+        configs = ['config/train_gpt2.py', 'config/train_shakespeare_char.py',
+                   'config/finetune_shakespeare.py', 'config/eval_gpt2.py',
+                   'config/eval_gpt2_medium.py', 'config/eval_gpt2_large.py',
+                   'config/eval_gpt2_xl.py']
 
-    - name: Check test results
-      run: |
-        if [ ${{ steps.pytest.outcome }} != 'success' ]; then
-          echo "Tests failed or encountered errors"
-          exit 1
-        fi
+        for cfg in configs:
+            if os.path.exists(cfg):
+                spec = importlib.util.spec_from_file_location('cfg', cfg)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                print(f'PASS: {cfg} loads successfully')
+            else:
+                print(f'SKIP: {cfg} not found')
 
-    - name: Upload test results
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: test-results-python${{ matrix.python-version }}
-        path: |
-          test-report.html
-          test-report.json
-          junit.xml
-          htmlcov/
-          coverage.xml
-        retention-days: 30
-
-    - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v3
-      if: matrix.python-version == '3.10'
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-
-    - name: Comment PR with test results
-      uses: actions/github-script@v6
-      if: github.event_name == 'pull_request' && always()
-      with:
-        script: |
-          const fs = require('fs');
-          let comment = `## Test Results for Python ${{ matrix.python-version }}\n\n`;
-          
-          try {
-            if (fs.existsSync('test-report.json')) {
-              const testReport = JSON.parse(fs.readFileSync('test-report.json', 'utf8'));
-              const summary = testReport.summary;
-              
-              comment += `- **Tests**: ${summary.total} total\n`;
-              comment += `- **Passed**: ${summary.passed || 0} ✅\n`;
-              comment += `- **Failed**: ${summary.failed || 0} ${summary.failed > 0 ? '❌' : '✅'}\n`;
-              comment += `- **Errors**: ${summary.error || 0} ${summary.error > 0 ? '❌' : '✅'}\n`;
-              comment += `- **Skipped**: ${summary.skipped || 0}\n`;
-              comment += `- **Duration**: ${summary.duration}s\n\n`;
-              
-              if (summary.failed > 0 || summary.error > 0) {
-                comment += `❌ Tests failed for Python ${{ matrix.python-version }}\n`;
-              } else {
-                comment += `✅ All tests passed for Python ${{ matrix.python-version }}\n`;
-              }
-            } else {
-              comment += `⚠️ Test report not found for Python ${{ matrix.python-version }}\n`;
-            }
-          } catch (error) {
-            comment += `⚠️ Error reading test report: ${error.message}\n`;
-          }
-          
-          // Only comment if this is the first Python version to avoid spam
-          if ('${{ matrix.python-version }}' === '3.10') {
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
-          }
-
-  summary:
-    needs: test
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-    - name: Check test results
-      run: |
-        if [[ "${{ needs.test.result }}" == "failure" ]]; then
-          echo "❌ Tests failed"
-          exit 1
-        elif [[ "${{ needs.test.result }}" == "cancelled" ]]; then
-          echo "⚠️ Tests were cancelled"
-          exit 1
-        else
-          echo "✅ All tests passed"
-        fi
-
-    - name: Report status
-      if: always()
-      run: |
-        echo "Test suite completed with status: ${{ needs.test.result }}"
-        echo "Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        print()
+        print('All config validations passed!')
+        "
