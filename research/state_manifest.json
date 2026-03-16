@@ -1,0 +1,23 @@
+{
+  "completed_agents": [
+    "ArchitectureAgent",
+    "TrainingAgent",
+    "DataAgent",
+    "ConfigAgent",
+    "CodeQualityAgent"
+  ],
+  "pending_agents": [],
+  "findings_count": 9,
+  "errors_count": 1,
+  "escalations_count": 1,
+  "timestamp": "2026-03-16T12:57:57.841648",
+  "analysis_facts": {
+    "known_issues": {
+      "value": [
+        "deprecated GradScaler API"
+      ],
+      "source": "train.py",
+      "timestamp": "2026-03-16T12:56:53.238693"
+    }
+  }
+}

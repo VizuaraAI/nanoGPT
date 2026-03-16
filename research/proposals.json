@@ -1,0 +1,12 @@
+[
+  {
+    "title": "Replace deprecated GradScaler API",
+    "description": "Update torch.cuda.amp.GradScaler to modern API",
+    "target_file": "train.py",
+    "modification_type": "bugfix",
+    "expected_impact": "Fix deprecation warning, ensure PyTorch 2.x compatibility",
+    "confidence": 0.9,
+    "supporting_findings": [],
+    "proposal_id": "P77839"
+  }
+]
