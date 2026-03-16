@@ -52,15 +52,17 @@ jobs:
         model = GPT(config)
         print('PASS: Model creation')
 
-        # Test 2: Forward pass
+        # Test 2: Forward pass without targets (returns last token logits only)
         idx = torch.randint(0, 256, (2, 16))
         logits, loss = model(idx)
-        assert logits.shape == (2, 16, 256), f'Expected (2,16,256), got {logits.shape}'
-        print('PASS: Forward pass shape correct')
+        assert logits.shape == (2, 1, 256), f'Expected (2,1,256), got {logits.shape}'
+        assert loss is None, 'Loss should be None without targets'
+        print('PASS: Forward pass shape correct (inference mode)')
 
-        # Test 3: Forward pass with targets (loss computation)
+        # Test 3: Forward pass with targets (returns all logits + loss)
         targets = torch.randint(0, 256, (2, 16))
         logits, loss = model(idx, targets)
+        assert logits.shape == (2, 16, 256), f'Expected (2,16,256), got {logits.shape}'
         assert loss is not None, 'Loss should not be None with targets'
         assert loss.item() > 0, 'Loss should be positive'
         print(f'PASS: Loss computation (loss={loss.item():.4f})')
@@ -74,7 +76,8 @@ jobs:
         model.crop_block_size(16)
         assert model.config.block_size == 16
         idx_short = torch.randint(0, 256, (1, 10))
-        logits, _ = model(idx_short)
+        targets_short = torch.randint(0, 256, (1, 10))
+        logits, _ = model(idx_short, targets_short)
         assert logits.shape == (1, 10, 256)
         print('PASS: crop_block_size')
 
