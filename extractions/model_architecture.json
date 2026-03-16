@@ -1,0 +1,56 @@
+{
+  "model_name": "GPT",
+  "base_class": "nn.Module",
+  "n_layer": 12,
+  "n_head": 12,
+  "n_embd": 768,
+  "block_size": 1024,
+  "vocab_size": 50304,
+  "activation_functions": [
+    "GELU"
+  ],
+  "normalization": "LayerNorm",
+  "attention_type": "CausalSelfAttention",
+  "dropout": 0.0,
+  "bias_type": "learned",
+  "bias_detail": "Configurable bias parameter for Linear layers and LayerNorms (default True)",
+  "weight_tying": true,
+  "components": [
+    {
+      "name": "Token Embeddings",
+      "type": "Embedding",
+      "details": "nn.Embedding(vocab_size, n_embd)"
+    },
+    {
+      "name": "Position Embeddings",
+      "type": "Embedding",
+      "details": "nn.Embedding(block_size, n_embd)"
+    },
+    {
+      "name": "Transformer Blocks",
+      "type": "ModuleList",
+      "details": "12 Block modules, each containing LayerNorm, CausalSelfAttention, and MLP"
+    },
+    {
+      "name": "Final LayerNorm",
+      "type": "LayerNorm",
+      "details": "Custom LayerNorm with optional bias"
+    },
+    {
+      "name": "Language Model Head",
+      "type": "Linear",
+      "details": "nn.Linear(n_embd, vocab_size, bias=False) with weight tying to token embeddings"
+    },
+    {
+      "name": "MLP",
+      "type": "Module",
+      "details": "Two Linear layers with GELU activation and dropout"
+    },
+    {
+      "name": "CausalSelfAttention",
+      "type": "Module",
+      "details": "Multi-head causal self-attention with Flash Attention support"
+    }
+  ],
+  "total_params_estimate": "124M (default config), scalable to 1558M for GPT2-XL variant"
+}

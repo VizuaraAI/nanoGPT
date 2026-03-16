@@ -1,0 +1,29 @@
+{
+  "configs": [
+    {
+      "custom_id": "config-train_gpt2",
+      "source_file": "config/train_gpt2.py",
+      "status": "parse_failed",
+      "raw_response": "```json\n{\n  \"config_name\": \"train_gpt2\",\n  \"batch_size\": 12,\n  \"learning_rate\": null,\n  \"max_iters\":"
+    },
+    {
+      "custom_id": "config-train_shakespeare_char",
+      "source_file": "config/train_shakespeare_char.py",
+      "status": "parse_failed",
+      "raw_response": "```json\n{\n  \"config_name\": \"train_shakespeare_char\",\n  \"batch_size\": 64,\n  \"learning_rate\": 0.001,\n "
+    },
+    {
+      "custom_id": "config-finetune_shakespeare",
+      "source_file": "config/finetune_shakespeare.py",
+      "status": "parse_failed",
+      "raw_response": "```json\n{\n  \"config_name\": \"finetune_shakespeare\",\n  \"batch_size\": 1,\n  \"learning_rate\": 3e-5,\n  \"ma"
+    },
+    {
+      "custom_id": "config-eval_gpt2",
+      "source_file": "config/eval_gpt2.py",
+      "status": "parse_failed",
+      "raw_response": "```json\n{\n  \"config_name\": \"eval_gpt2\",\n  \"batch_size\": 8,\n  \"learning_rate\": null,\n  \"max_iters\": n"
+    }
+  ],
+  "total_configs": 4
+}
