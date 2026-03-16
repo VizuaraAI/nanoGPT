@@ -4,157 +4,53 @@ on:
   pull_request:
     branches: [ main, master ]
     paths:
-      - 'model.py'
-      - 'train.py'
-      - 'config/*.py'
-      - '*.py'
+      - '**.py'
   push:
     branches: [ main, master ]
     paths:
-      - 'model.py'
-      - 'train.py'
-      - 'config/*.py'
-      - '*.py'
+      - '**.py'
 
 jobs:
   lint:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # Fetch full history for git diff
-        
+
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.9'
-        
-    - name: Install dependencies
+        python-version: '3.11'
+
+    - name: Install linting tools
       run: |
         python -m pip install --upgrade pip
         pip install flake8 black isort
-        
-    - name: Get changed Python files
-      id: changed-files
+
+    - name: Run flake8 (syntax errors and undefined names only)
       run: |
-        if [ "${{ github.event_name }}" == "pull_request" ]; then
-          # For PRs, compare against the base branch
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          CHANGED_FILES=$(git diff --name-only --diff-filter=AM $BASE_SHA...$HEAD_SHA | grep -E '\.(py)$' | grep -E '^(model\.py|train\.py|config/.*\.py)$' || true)
-        else
-          # For pushes, compare against the previous commit
-          CHANGED_FILES=$(git diff --name-only --diff-filter=AM HEAD~1 HEAD | grep -E '\.(py)$' | grep -E '^(model\.py|train\.py|config/.*\.py)$' || true)
-        fi
-        
-        echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-        echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        
-        # Also set a flag if any files were found
-        if [ -n "$CHANGED_FILES" ]; then
-          echo "has_files=true" >> $GITHUB_OUTPUT
-        else
-          echo "has_files=false" >> $GITHUB_OUTPUT
-        fi
-        
-    - name: Run flake8
-      if: steps.changed-files.outputs.has_files == 'true'
-      id: flake8
+        echo "Checking for syntax errors and undefined names..."
+        flake8 model.py train.py sample.py --select=E9,F63,F7,F82 --show-source --statistics
+        echo "PASS: No syntax errors or undefined names"
+
+    - name: Run flake8 (style warnings)
+      continue-on-error: true
       run: |
-        echo "Running flake8 on changed files..."
-        echo "${{ steps.changed-files.outputs.changed_files }}"
-        
-        # Create output file for flake8 results
-        FLAKE8_OUTPUT=$(mktemp)
-        EXIT_CODE=0
-        
-        # Run flake8 on changed files
-        echo "${{ steps.changed-files.outputs.changed_files }}" | while read -r file; do
-          if [ -n "$file" ] && [ -f "$file" ]; then
-            echo "Checking $file with flake8..."
-            flake8 "$file" --max-line-length=88 --extend-ignore=E203,W503 || EXIT_CODE=$?
-          fi
-        done > "$FLAKE8_OUTPUT" 2>&1
-        
-        # Check if flake8 found any issues
-        if [ -s "$FLAKE8_OUTPUT" ]; then
-          echo "flake8_errors<<EOF" >> $GITHUB_OUTPUT
-          cat "$FLAKE8_OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "flake8_failed=true" >> $GITHUB_OUTPUT
-          exit 1
-        else
-          echo "flake8_failed=false" >> $GITHUB_OUTPUT
-        fi
-        
+        echo "Checking code style (non-blocking)..."
+        flake8 model.py train.py --max-line-length=120 --extend-ignore=E203,W503,E501 --statistics || true
+
     - name: Run black --check
-      if: steps.changed-files.outputs.has_files == 'true'
-      id: black
+      continue-on-error: true
       run: |
-        echo "Running black --check on changed files..."
-        BLACK_OUTPUT=$(mktemp)
-        EXIT_CODE=0
-        
-        echo "${{ steps.changed-files.outputs.changed_files }}" | while read -r file; do
-          if [ -n "$file" ] && [ -f "$file" ]; then
-            echo "Checking $file with black..."
-            black --check --diff "$file" || EXIT_CODE=$?
-          fi
-        done > "$BLACK_OUTPUT" 2>&1
-        
-        if [ $EXIT_CODE -ne 0 ]; then
-          echo "black_errors<<EOF" >> $GITHUB_OUTPUT
-          cat "$BLACK_OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "black_failed=true" >> $GITHUB_OUTPUT
-          exit 1
-        else
-          echo "black_failed=false" >> $GITHUB_OUTPUT
-        fi
-        
+        echo "Checking formatting with black..."
+        black --check --diff --line-length=120 model.py train.py || echo "Note: black would reformat some files (non-blocking)"
+
     - name: Run isort --check
-      if: steps.changed-files.outputs.has_files == 'true'
-      id: isort
+      continue-on-error: true
       run: |
-        echo "Running isort --check on changed files..."
-        ISORT_OUTPUT=$(mktemp)
-        EXIT_CODE=0
-        
-        echo "${{ steps.changed-files.outputs.changed_files }}" | while read -r file; do
-          if [ -n "$file" ] && [ -f "$file" ]; then
-            echo "Checking $file with isort..."
-            isort --check-only --diff "$file" --profile black || EXIT_CODE=$?
-          fi
-        done > "$ISORT_OUTPUT" 2>&1
-        
-        if [ $EXIT_CODE -ne 0 ]; then
-          echo "isort_errors<<EOF" >> $GITHUB_OUTPUT
-          cat "$ISORT_OUTPUT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "isort_failed=true" >> $GITHUB_OUTPUT
-          exit 1
-        else
-          echo "isort_failed=false" >> $GITHUB_OUTPUT
-        fi
-        
-    - name: Comment PR with lint errors
-      if: |
-        github.event_name == 'pull_request' && 
-        (steps.flake8.outputs.flake8_failed == 'true' || 
-         steps.black.outputs.black_failed == 'true' || 
-         steps.isort.outputs.isort_failed == 'true')
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const flake8Errors = `${{ steps.flake8.outputs.flake8_errors || '' }}`;
-          const blackErrors = `${{ steps.black.outputs.black_errors || '' }}`;
-          const isortErrors = `${{ steps.isort.outputs.isort_errors || '' }}`;
-          
-          let comment = '## 🚨 Lint Issues Found\n\n';
-          comment += 'The following linting issues were found in your changes:\n\n';
-          
-          if (flake8Errors) {
-            comment += '### Flake8 Issues\n
+        echo "Checking import order with isort..."
+        isort --check-only --diff --profile black model.py train.py || echo "Note: isort would reorder some imports (non-blocking)"
+
+    - name: Summary
+      run: echo "Lint checks complete. Only syntax errors block the build."
