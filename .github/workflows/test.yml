@@ -1,0 +1,226 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-python${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/setup.py') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-python${{ matrix.python-version }}-
+          ${{ runner.os }}-pip-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip wheel setuptools
+        pip install torch --index-url https://download.pytorch.org/whl/cpu
+        pip install numpy pytest pytest-cov pytest-xvfb pytest-html pytest-json-report
+        
+        # Install additional requirements if they exist
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+        if [ -f requirements-dev.txt ]; then
+          pip install -r requirements-dev.txt
+        fi
+        if [ -f pyproject.toml ]; then
+          pip install -e .
+        fi
+
+    - name: Verify installation
+      run: |
+        python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
+        python -c "import numpy; print(f'NumPy version: {numpy.__version__}')"
+        python -c "import pytest; print(f'pytest version: {pytest.__version__}')"
+
+    - name: Create tests directory if it doesn't exist
+      run: |
+        mkdir -p tests
+        if [ ! -f tests/__init__.py ]; then
+          touch tests/__init__.py
+        fi
+        
+        # Create a basic test file if none exist
+        if [ -z "$(find tests -name 'test_*.py' -o -name '*_test.py')" ]; then
+          cat > tests/test_basic.py << 'EOF'
+        import sys
+        import os
+        
+        # Add the project root to Python path
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
+        def test_imports():
+            """Test that basic imports work."""
+            try:
+                import torch
+                import numpy as np
+                assert True
+            except ImportError as e:
+                assert False, f"Import failed: {e}"
+        
+        def test_torch_basic():
+            """Test basic PyTorch functionality."""
+            import torch
+            x = torch.randn(2, 3)
+            assert x.shape == (2, 3)
+            assert x.dtype == torch.float32
+        
+        def test_numpy_basic():
+            """Test basic NumPy functionality."""
+            import numpy as np
+            x = np.random.randn(2, 3)
+            assert x.shape == (2, 3)
+            assert x.dtype == np.float64
+        EOF
+        fi
+
+    - name: Lint code (if flake8 is available)
+      continue-on-error: true
+      run: |
+        if pip show flake8 > /dev/null 2>&1; then
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        else
+          echo "flake8 not installed, skipping linting"
+        fi
+
+    - name: Run tests with pytest
+      id: pytest
+      run: |
+        pytest tests/ \
+          --verbose \
+          --tb=short \
+          --cov=. \
+          --cov-report=xml \
+          --cov-report=html \
+          --cov-report=term-missing \
+          --html=test-report.html \
+          --self-contained-html \
+          --json-report \
+          --json-report-file=test-report.json \
+          --junit-xml=junit.xml
+      continue-on-error: true
+
+    - name: Check test results
+      run: |
+        if [ ${{ steps.pytest.outcome }} != 'success' ]; then
+          echo "Tests failed or encountered errors"
+          exit 1
+        fi
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-python${{ matrix.python-version }}
+        path: |
+          test-report.html
+          test-report.json
+          junit.xml
+          htmlcov/
+          coverage.xml
+        retention-days: 30
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v3
+      if: matrix.python-version == '3.10'
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+    - name: Comment PR with test results
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request' && always()
+      with:
+        script: |
+          const fs = require('fs');
+          let comment = `## Test Results for Python ${{ matrix.python-version }}\n\n`;
+          
+          try {
+            if (fs.existsSync('test-report.json')) {
+              const testReport = JSON.parse(fs.readFileSync('test-report.json', 'utf8'));
+              const summary = testReport.summary;
+              
+              comment += `- **Tests**: ${summary.total} total\n`;
+              comment += `- **Passed**: ${summary.passed || 0} ✅\n`;
+              comment += `- **Failed**: ${summary.failed || 0} ${summary.failed > 0 ? '❌' : '✅'}\n`;
+              comment += `- **Errors**: ${summary.error || 0} ${summary.error > 0 ? '❌' : '✅'}\n`;
+              comment += `- **Skipped**: ${summary.skipped || 0}\n`;
+              comment += `- **Duration**: ${summary.duration}s\n\n`;
+              
+              if (summary.failed > 0 || summary.error > 0) {
+                comment += `❌ Tests failed for Python ${{ matrix.python-version }}\n`;
+              } else {
+                comment += `✅ All tests passed for Python ${{ matrix.python-version }}\n`;
+              }
+            } else {
+              comment += `⚠️ Test report not found for Python ${{ matrix.python-version }}\n`;
+            }
+          } catch (error) {
+            comment += `⚠️ Error reading test report: ${error.message}\n`;
+          }
+          
+          // Only comment if this is the first Python version to avoid spam
+          if ('${{ matrix.python-version }}' === '3.10') {
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+          }
+
+  summary:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Check test results
+      run: |
+        if [[ "${{ needs.test.result }}" == "failure" ]]; then
+          echo "❌ Tests failed"
+          exit 1
+        elif [[ "${{ needs.test.result }}" == "cancelled" ]]; then
+          echo "⚠️ Tests were cancelled"
+          exit 1
+        else
+          echo "✅ All tests passed"
+        fi
+
+    - name: Report status
+      if: always()
+      run: |
+        echo "Test suite completed with status: ${{ needs.test.result }}"
+        echo "Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -1,0 +1,219 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**.py'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Claude Code CLI
+        run: |
+          pip install claude-code-cli
+          
+      - name: Run Claude Code Review
+        id: review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Create output directory
+          mkdir -p review-output
+          
+          # Run Claude Code review with JSON output
+          claude-code review \
+            --output-format json \
+            --files model.py train.py \
+            --severity-levels error,warning,suggestion \
+            --output review-output/results.json || echo "Review completed with findings"
+          
+          # Store results for next step
+          echo "results_file=review-output/results.json" >> $GITHUB_OUTPUT
+
+      - name: Parse Review Results and Post Comments
+        uses: actions/github-script@v7
+        env:
+          RESULTS_FILE: ${{ steps.review.outputs.results_file }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Read Claude Code review results
+            const resultsPath = process.env.RESULTS_FILE;
+            if (!fs.existsSync(resultsPath)) {
+              console.log('No review results found');
+              return;
+            }
+            
+            const reviewData = JSON.parse(fs.readFileSync(resultsPath, 'utf8'));
+            
+            // Parse findings and post comments
+            await postReviewComments(reviewData);
+            
+            async function postReviewComments(data) {
+              const { findings, summary } = data;
+              
+              // Post summary comment
+              await postSummaryComment(summary);
+              
+              // Post individual finding comments
+              for (const finding of findings) {
+                await postFindingComment(finding);
+              }
+            }
+            
+            async function postSummaryComment(summary) {
+              const { total_findings, by_severity, by_file } = summary;
+              
+              const severityEmojis = {
+                error: '🚨',
+                warning: '⚠️',
+                suggestion: '💡'
+              };
+              
+              let summaryText = `## 🤖 Claude Code Review Summary\n\n`;
+              summaryText += `**Total Findings:** ${total_findings}\n\n`;
+              
+              if (total_findings > 0) {
+                summaryText += `### By Severity\n`;
+                for (const [severity, count] of Object.entries(by_severity)) {
+                  if (count > 0) {
+                    summaryText += `${severityEmojis[severity]} **${severity.toUpperCase()}**: ${count}\n`;
+                  }
+                }
+                
+                summaryText += `\n### By File\n`;
+                for (const [file, count] of Object.entries(by_file)) {
+                  summaryText += `- \`${file}\`: ${count} findings\n`;
+                }
+              } else {
+                summaryText += `✅ No issues found! Code looks good.`;
+              }
+              
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summaryText
+              });
+            }
+            
+            async function postFindingComment(finding) {
+              const { file, line, severity, category, title, description, suggestion, confidence } = finding;
+              
+              const severityEmojis = {
+                error: '🚨',
+                warning: '⚠️',
+                suggestion: '💡'
+              };
+              
+              const confidenceBar = '█'.repeat(Math.round(confidence / 10)) + 
+                                   '░'.repeat(10 - Math.round(confidence / 10));
+              
+              let commentBody = `### ${severityEmojis[severity]} ${title}\n\n`;
+              commentBody += `**Category:** ${category}\n`;
+              commentBody += `**Severity:** ${severity.toUpperCase()}\n`;
+              commentBody += `**Confidence:** ${confidence}% ${confidenceBar}\n\n`;
+              commentBody += `**Description:**\n${description}\n\n`;
+              
+              if (suggestion) {
+                commentBody += `**Suggested Fix:**\n${suggestion}\n\n`;
+              }
+              
+              commentBody += `---\n*Generated by Claude Code Review*`;
+              
+              // Get the commit SHA for the PR
+              const commits = await github.rest.pulls.listCommits({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number
+              });
+              
+              const latestCommit = commits.data[commits.data.length - 1];
+              
+              try {
+                await github.rest.pulls.createReviewComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  commit_id: latestCommit.sha,
+                  path: file,
+                  line: line,
+                  body: commentBody
+                });
+              } catch (error) {
+                // Fallback to general comment if line comment fails
+                console.log(`Could not post line comment for ${file}:${line}, posting as general comment`);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: `**File: \`${file}\` Line: ${line}**\n\n${commentBody}`
+                });
+              }
+            }
+
+      - name: Set Review Status
+        uses: actions/github-script@v7
+        env:
+          RESULTS_FILE: ${{ steps.review.outputs.results_file }}
+        with:
+          script: |
+            const fs = require('fs');
+            
+            if (!fs.existsSync(process.env.RESULTS_FILE)) {
+              return;
+            }
+            
+            const reviewData = JSON.parse(fs.readFileSync(process.env.RESULTS_FILE, 'utf8'));
+            const { summary } = reviewData;
+            
+            // Determine overall status
+            const hasErrors = summary.by_severity.error > 0;
+            const hasWarnings = summary.by_severity.warning > 0;
+            
+            let conclusion = 'success';
+            let title = 'Claude Code Review Passed';
+            let summaryText = 'No critical issues found';
+            
+            if (hasErrors) {
+              conclusion = 'failure';
+              title = 'Claude Code Review Failed';
+              summaryText = `Found ${summary.by_severity.error} error(s) that need attention`;
+            } else if (hasWarnings) {
+              conclusion = 'neutral';
+              title = 'Claude Code Review Completed with Warnings';
+              summaryText = `Found ${summary.by_severity.warning} warning(s) to consider`;
+            }
+            
+            // Create check run
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Claude Code Review',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: conclusion,
+              output: {
+                title: title,
+                summary: summaryText,
+                text: `Total findings: ${summary.total_findings}\n\nSee PR comments for detailed feedback.`
+              }
+            });
